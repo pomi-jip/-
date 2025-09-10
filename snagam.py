@@ -1,4 +1,4 @@
-import run
+
 import streamlit as st
 import requests
 import datetime
@@ -864,4 +864,5 @@ def create_school_info():
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
+
     main()
