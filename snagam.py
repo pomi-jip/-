@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit.components.v1 as components
 from typing import List, Dict, Any
 import logging
+import random
 
 # ====== 기본 세팅 ======
 st.set_page_config(
@@ -122,6 +123,23 @@ st.markdown("""
         transform: translateY(-3px);
         box-shadow: 0 12px 35px rgba(46, 125, 50, 0.4);
     }
+    
+    .game-card {
+        background: linear-gradient(145deg, #fff3e0, #ffe0b2);
+        border-radius: 20px;
+        padding: 25px;
+        margin: 15px 0;
+        box-shadow: 0 10px 30px rgba(255, 152, 0, 0.15);
+        border: 1px solid rgba(255, 193, 7, 0.3);
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    
+    .game-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 15px 40px rgba(255, 152, 0, 0.25);
+        border-color: rgba(255, 193, 7, 0.5);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -150,6 +168,40 @@ SD_SCHUL_CODE = "7010806"
 def get_cached_meals() -> List[Dict[str, Any]]:
     """급식 데이터를 캐시와 함께 가져오는 함수"""
     return get_meals()
+
+# ====== 칼로리 추정 함수 ======
+def estimate_calories(meal_text: str) -> int:
+    """급식 메뉴를 기반으로 칼로리를 추정하는 함수"""
+    # 메뉴별 대략적인 칼로리 추정
+    calorie_keywords = {
+        "밥": 150, "쌀": 150, "현미": 140, "잡곡": 160,
+        "김치찌개": 120, "된장찌개": 100, "미역국": 30, "콩나물국": 25,
+        "불고기": 180, "닭고기": 165, "생선": 120, "돼지고기": 200,
+        "계란": 70, "두부": 80, "콩": 60,
+        "김치": 20, "샐러드": 50, "나물": 30, "무": 15,
+        "우유": 60, "요구르트": 80,
+        "빵": 250, "떡": 200, "면": 180,
+        "튀김": 200, "전": 150, "볶음": 120
+    }
+    
+    total_calories = 0
+    meal_lower = meal_text.lower().replace(" ", "")
+    
+    # 키워드 매칭으로 칼로리 합산
+    for keyword, calories in calorie_keywords.items():
+        if keyword in meal_lower:
+            total_calories += calories
+    
+    # 메뉴 개수 기반 보정
+    menu_items = [item.strip() for item in meal_text.replace("🍽", "").split("\n") if item.strip()]
+    menu_count = len(menu_items)
+    
+    # 기본 칼로리가 너무 낮으면 메뉴 개수로 추정
+    if total_calories < 200:
+        total_calories = 200 + (menu_count - 1) * 80
+    
+    # 일반적인 학교급식 칼로리 범위로 제한
+    return min(max(total_calories, 450), 850)
 
 # ====== 급식 파싱 함수 개선 ======
 def parse_meal_text(meal_str: str) -> str:
@@ -206,11 +258,28 @@ def get_meals() -> List[Dict[str, Any]]:
                 formatted_date = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
                 meals_text = parse_meal_text(row["DDISH_NM"].replace(" ", "").replace("\r", ""))
                 
+                # 칼로리 정보가 있으면 사용, 없으면 추정
+                calories = 0
+                if "CAL_INFO" in row and row["CAL_INFO"]:
+                    try:
+                        # API에서 칼로리 정보 파싱 (예: "650.5 Kcal" -> 651)
+                        cal_match = re.search(r'(\d+(?:\.\d+)?)', row["CAL_INFO"])
+                        if cal_match:
+                            calories = int(float(cal_match.group(1)))
+                    except:
+                        pass
+                
+                # 칼로리 정보가 없으면 추정
+                if calories == 0:
+                    clean_meal_text = re.sub('<.*?>', '', meals_text)
+                    calories = estimate_calories(clean_meal_text)
+                
                 events.append({
-                    "title": "🍴 급식",
+                    "title": f"🍴 급식 ({calories}kcal)",
                     "start": formatted_date,
                     "extendedProps": {
                         "description": meals_text,
+                        "calories": calories,
                         "raw_date": date
                     }
                 })
@@ -258,6 +327,9 @@ def main():
     if events:
         col1, col2, col3, col4 = st.columns(4)
         
+        # 평균 칼로리 계산
+        avg_calories = int(sum(event['extendedProps']['calories'] for event in events) / len(events))
+        
         with col1:
             st.markdown(f"""
             <div class='stat-card'>
@@ -270,9 +342,9 @@ def main():
         with col2:
             st.markdown(f"""
             <div class='stat-card'>
-                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>🍽️</div>
-                <div style='font-size: 1.5rem; font-weight: bold;'>{len(events) * 4}</div>
-                <div style='font-size: 0.9rem; opacity: 0.9;'>예상 메뉴 수</div>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>🔥</div>
+                <div style='font-size: 1.5rem; font-weight: bold;'>{avg_calories}</div>
+                <div style='font-size: 0.9rem; opacity: 0.9;'>평균 칼로리</div>
             </div>
             """, unsafe_allow_html=True)
         
@@ -290,9 +362,9 @@ def main():
         with col4:
             st.markdown(f"""
             <div class='stat-card'>
-                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>🔄</div>
-                <div style='font-size: 1.2rem; font-weight: bold;'>1시간</div>
-                <div style='font-size: 0.9rem; opacity: 0.9;'>업데이트 주기</div>
+                <div style='font-size: 2rem; margin-bottom: 0.5rem;'>🎮</div>
+                <div style='font-size: 1.2rem; font-weight: bold;'>NEW!</div>
+                <div style='font-size: 0.9rem; opacity: 0.9;'>미니게임</div>
             </div>
             """, unsafe_allow_html=True)
         
@@ -303,6 +375,7 @@ def main():
             <h3 style='margin: 0 0 10px 0; color: #1b5e20;'>🎉 데이터 로딩 완료!</h3>
             <p style='margin: 0; color: #2e7d32; font-size: 1.1rem;'>
                 총 <strong>{len(events)}일</strong>의 맛있는 급식 정보를 성공적으로 불러왔습니다!
+                평균 칼로리: <strong>{avg_calories}kcal</strong>
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -318,7 +391,7 @@ def main():
         return
     
     # 탭 생성
-    tab1, tab2, tab3 = st.tabs(["📅 급식 캘린더", "📋 급식 목록", "ℹ️ 학교 정보"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📅 급식 캘린더", "📋 급식 목록", "🎮 미니게임", "ℹ️ 학교 정보"])
     
     with tab1:
         create_green_calendar(events)
@@ -327,10 +400,13 @@ def main():
         create_beautiful_meal_list(events)
     
     with tab3:
+        create_mini_games(events)
+    
+    with tab4:
         create_school_info()
 
 def create_green_calendar(events: List[Dict[str, Any]]):
-    """초록 테마 캘린더 UI 생성"""
+    """초록 테마 캘린더 UI 생성 (칼로리 정보 포함)"""
     events_json = json.dumps(events, ensure_ascii=False)
     
     calendar_html = f"""
@@ -478,6 +554,7 @@ def create_green_calendar(events: List[Dict[str, Any]]):
                     eventClick: function(info) {{
                         try {{
                             const content = info.event.extendedProps.description;
+                            const calories = info.event.extendedProps.calories || 0;
                             const dateStr = new Date(info.event.start).toLocaleDateString('ko-KR', {{
                                 year: 'numeric',
                                 month: 'long',
@@ -498,6 +575,11 @@ def create_green_calendar(events: List[Dict[str, Any]]):
                                                       color: #2e7d32; box-shadow: inset 0 2px 10px rgba(46, 125, 50, 0.1);">
                                              ${{content}}
                                              <br><br>
+                                             <div style="text-align: center; background: linear-gradient(135deg, #ff9800, #f57c00);
+                                                        color: white; padding: 10px; border-radius: 10px; font-weight: 600;">
+                                                 🔥 예상 칼로리: ${{calories}}kcal
+                                             </div>
+                                             <br>
                                              <div style="text-align: center; font-style: italic; 
                                                         background: linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%);
                                                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
@@ -621,7 +703,7 @@ def create_green_calendar(events: List[Dict[str, Any]]):
     components.html(calendar_html, height=800, scrolling=False)
 
 def create_beautiful_meal_list(events: List[Dict[str, Any]]):
-    """아름다운 급식 목록 생성 (초록 테마)"""
+    """아름다운 급식 목록 생성 (초록 테마, 칼로리 포함)"""
     st.markdown("### 📋 급식 목록")
     
     if not events:
@@ -664,10 +746,13 @@ def create_beautiful_meal_list(events: List[Dict[str, Any]]):
         clean_description = re.sub('<.*?>', '', event['extendedProps']['description'])
         clean_description = clean_description.replace('🍽 ', '').replace('<br>', '\n')
         
+        calories = event['extendedProps'].get('calories', 0)
+        
         meal_data.append({
             "날짜": f"{weekday_emoji.get(weekday, '📅')} {formatted_date}",
             "급식 메뉴": clean_description,
             "메뉴 수": len([m for m in clean_description.split('\n') if m.strip()]),
+            "칼로리": calories,
             "원본": event['extendedProps']['description']
         })
     
@@ -705,15 +790,24 @@ def create_beautiful_meal_list(events: List[Dict[str, Any]]):
             # JavaScript 안전한 문자열 처리
             safe_content = meal['원본'].replace("'", "\\'").replace('"', '\\"').replace('\n', '\\n')
             
+            # 칼로리에 따른 색상 결정
+            cal_color = "#4caf50" if meal['칼로리'] <= 600 else "#ff9800" if meal['칼로리'] <= 750 else "#f44336"
+            
             st.markdown(f"""
             <div class='meal-card'>
                 <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>
                     <h4 style='margin: 0; color: #2e7d32; font-size: 1.2rem; font-weight: 600;'>
                         {meal['날짜']}
                     </h4>
-                    <div style='background: linear-gradient(135deg, #4caf50, #388e3c); 
-                               color: white; padding: 5px 12px; border-radius: 15px; font-size: 0.8rem; font-weight: 500;'>
-                        {meal['메뉴 수']}개 메뉴
+                    <div style='display: flex; gap: 10px; align-items: center;'>
+                        <div style='background: {cal_color}; 
+                                   color: white; padding: 5px 12px; border-radius: 15px; font-size: 0.8rem; font-weight: 500;'>
+                            🔥 {meal['칼로리']}kcal
+                        </div>
+                        <div style='background: linear-gradient(135deg, #4caf50, #388e3c); 
+                                   color: white; padding: 5px 12px; border-radius: 15px; font-size: 0.8rem; font-weight: 500;'>
+                            {meal['메뉴 수']}개 메뉴
+                        </div>
                     </div>
                 </div>
                 <div style='color: #2e7d32; line-height: 1.8; font-size: 0.95rem;'>
@@ -741,7 +835,7 @@ def create_beautiful_meal_list(events: List[Dict[str, Any]]):
                 if (typeof Swal !== 'undefined') {{
                     Swal.fire({{
                         title: '<div style="color: #2e7d32; font-size: 1.5rem; font-weight: 600;">{meal["날짜"]} 전체 메뉴</div>',
-                        html: '<div style="text-align: left; line-height: 2; font-size: 1rem; color: #2e7d32;">{safe_content}</div>',
+                        html: '<div style="text-align: left; line-height: 2; font-size: 1rem; color: #2e7d32;">{safe_content}</div><br><div style="text-align: center; background: {cal_color}; color: white; padding: 10px; border-radius: 10px; font-weight: 600;">🔥 예상 칼로리: {meal["칼로리"]}kcal</div>',
                         confirmButtonText: '맛있겠어요! 😋',
                         confirmButtonColor: '#4caf50',
                         showCloseButton: true,
@@ -749,7 +843,7 @@ def create_beautiful_meal_list(events: List[Dict[str, Any]]):
                         background: '#f9f9f9'
                     }});
                 }} else {{
-                    alert('전체 메뉴:\\n{meal["급식 메뉴"]}');
+                    alert('전체 메뉴:\\n{meal["급식 메뉴"]}\\n\\n칼로리: {meal["칼로리"]}kcal');
                 }}
             }}
             </script>
@@ -759,9 +853,499 @@ def create_beautiful_meal_list(events: List[Dict[str, Any]]):
     with st.expander("📊 전체 데이터 테이블로 보기"):
         df = pd.DataFrame([{
             "날짜": meal["날짜"], 
-            "급식 메뉴": meal["급식 메뉴"]
+            "급식 메뉴": meal["급식 메뉴"],
+            "칼로리": f"{meal['칼로리']}kcal"
         } for meal in display_data])
         st.dataframe(df, use_container_width=True, height=400)
+
+def create_mini_games(events: List[Dict[str, Any]]):
+    """미니게임 탭 생성"""
+    st.markdown("### 🎮 미니게임 센터")
+    st.markdown("""
+    <div style='text-align: center; background: linear-gradient(135deg, #ff9800, #f57c00); 
+               color: white; padding: 20px; border-radius: 20px; margin: 20px 0;'>
+        <h3 style='margin: 0 0 10px 0;'>🎯 점심시간이 심심할 때 플레이해보세요!</h3>
+        <p style='margin: 0; font-size: 1.1rem;'>급식과 관련된 재미있는 게임들을 준비했어요</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 게임 선택
+    game_col1, game_col2 = st.columns(2)
+    
+    with game_col1:
+        if st.button("🍱 급식 메뉴 맞추기", key="menu_quiz", help="오늘의 급식 메뉴를 맞춰보세요!"):
+            st.session_state.selected_game = "menu_quiz"
+        
+        if st.button("🎯 칼로리 추정 게임", key="calorie_game", help="급식의 칼로리를 추정해보세요!"):
+            st.session_state.selected_game = "calorie_game"
+    
+    with game_col2:
+        if st.button("🃏 급식 카드 매칭", key="card_matching", help="같은 메뉴 카드를 찾아보세요!"):
+            st.session_state.selected_game = "card_matching"
+        
+        if st.button("🎲 행운의 메뉴 뽑기", key="lucky_menu", help="랜덤으로 메뉴를 추천받아보세요!"):
+            st.session_state.selected_game = "lucky_menu"
+    
+    # 선택된 게임 실행
+    if hasattr(st.session_state, 'selected_game'):
+        st.markdown("<hr style='margin: 30px 0;'>", unsafe_allow_html=True)
+        
+        if st.session_state.selected_game == "menu_quiz":
+            play_menu_quiz(events)
+        elif st.session_state.selected_game == "calorie_game":
+            play_calorie_game(events)
+        elif st.session_state.selected_game == "card_matching":
+            play_card_matching(events)
+        elif st.session_state.selected_game == "lucky_menu":
+            play_lucky_menu(events)
+
+def play_menu_quiz(events: List[Dict[str, Any]]):
+    """급식 메뉴 맞추기 게임"""
+    st.markdown("### 🍱 급식 메뉴 맞추기")
+    
+    if not events:
+        st.error("급식 데이터가 없습니다.")
+        return
+    
+    # 게임 초기화
+    if 'quiz_score' not in st.session_state:
+        st.session_state.quiz_score = 0
+        st.session_state.quiz_count = 0
+        st.session_state.current_quiz = None
+    
+    # 새 문제 생성
+    if st.button("새 문제 출제!", key="new_quiz"):
+        random_event = random.choice(events)
+        clean_menu = re.sub('<.*?>', '', random_event['extendedProps']['description'])
+        menu_items = [item.strip().replace('🍽 ', '') for item in clean_menu.split('\n') if item.strip()]
+        
+        if len(menu_items) >= 3:
+            correct_answer = random.choice(menu_items)
+            wrong_answers = [item for item in menu_items if item != correct_answer]
+            
+            # 다른 날짜의 메뉴에서 틀린 답 가져오기
+            other_events = [e for e in events if e != random_event]
+            for other_event in random.sample(other_events, min(3, len(other_events))):
+                other_menu = re.sub('<.*?>', '', other_event['extendedProps']['description'])
+                other_items = [item.strip().replace('🍽 ', '') for item in other_menu.split('\n') if item.strip()]
+                wrong_answers.extend(other_items[:2])
+            
+            # 선택지 생성 (정답 1개 + 오답 3개)
+            choices = [correct_answer] + random.sample(wrong_answers, min(3, len(wrong_answers)))
+            random.shuffle(choices)
+            
+            date_obj = datetime.datetime.strptime(random_event['start'], '%Y-%m-%d')
+            formatted_date = date_obj.strftime('%m월 %d일')
+            
+            st.session_state.current_quiz = {
+                'date': formatted_date,
+                'menu': clean_menu,
+                'correct_answer': correct_answer,
+                'choices': choices,
+                'calories': random_event['extendedProps'].get('calories', 0)
+            }
+    
+    # 현재 퀴즈 표시
+    if st.session_state.current_quiz:
+        quiz = st.session_state.current_quiz
+        
+        st.markdown(f"""
+        <div class='game-card'>
+            <h4 style='color: #e65100; text-align: center; margin-bottom: 20px;'>
+                📅 {quiz['date']} 급식 메뉴 중에서...
+            </h4>
+            <div style='background: white; padding: 15px; border-radius: 10px; margin: 15px 0;'>
+                <p style='font-size: 1.1rem; text-align: center; color: #2e7d32;'>
+                    다음 중 <strong>실제로 나온 메뉴</strong>는 무엇일까요?
+                </p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 선택지
+        user_answer = st.radio(
+            "정답을 선택하세요:",
+            quiz['choices'],
+            key="quiz_answer"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("정답 확인!", key="check_answer"):
+                st.session_state.quiz_count += 1
+                if user_answer == quiz['correct_answer']:
+                    st.session_state.quiz_score += 1
+                    st.success(f"🎉 정답입니다! '{quiz['correct_answer']}'가 맞아요!")
+                    st.balloons()
+                else:
+                    st.error(f"❌ 틀렸어요. 정답은 '{quiz['correct_answer']}'입니다.")
+                
+                # 전체 메뉴 보여주기
+                st.markdown(f"""
+                <div class='success-box'>
+                    <h4>📋 {quiz['date']} 전체 메뉴</h4>
+                    <p style='line-height: 2;'>{quiz['menu'].replace(chr(10), '<br>')}</p>
+                    <p style='text-align: center; font-weight: bold; color: #ff6600;'>
+                        🔥 칼로리: {quiz['calories']}kcal
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("힌트 보기", key="show_hint"):
+                st.info(f"💡 힌트: 칼로리는 {quiz['calories']}kcal 입니다!")
+    
+    # 점수 표시
+    if st.session_state.quiz_count > 0:
+        accuracy = (st.session_state.quiz_score / st.session_state.quiz_count) * 100
+        st.markdown(f"""
+        <div class='stat-card' style='margin: 20px auto; max-width: 300px;'>
+            <h4 style='margin: 0 0 10px 0;'>🏆 게임 성과</h4>
+            <p style='margin: 5px 0;'>정답: {st.session_state.quiz_score}개</p>
+            <p style='margin: 5px 0;'>총 문제: {st.session_state.quiz_count}개</p>
+            <p style='margin: 5px 0;'>정답률: {accuracy:.1f}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def play_calorie_game(events: List[Dict[str, Any]]):
+    """칼로리 추정 게임"""
+    st.markdown("### 🎯 칼로리 추정 게임")
+    
+    if not events:
+        st.error("급식 데이터가 없습니다.")
+        return
+    
+    # 게임 초기화
+    if 'calorie_score' not in st.session_state:
+        st.session_state.calorie_score = 0
+        st.session_state.calorie_count = 0
+        st.session_state.current_calorie_quiz = None
+    
+    # 새 문제 생성
+    if st.button("새 메뉴 도전!", key="new_calorie_quiz"):
+        random_event = random.choice(events)
+        clean_menu = re.sub('<.*?>', '', random_event['extendedProps']['description'])
+        date_obj = datetime.datetime.strptime(random_event['start'], '%Y-%m-%d')
+        formatted_date = date_obj.strftime('%m월 %d일')
+        
+        st.session_state.current_calorie_quiz = {
+            'date': formatted_date,
+            'menu': clean_menu,
+            'actual_calories': random_event['extendedProps'].get('calories', 0)
+        }
+    
+    # 현재 퀴즈 표시
+    if st.session_state.current_calorie_quiz:
+        quiz = st.session_state.current_calorie_quiz
+        
+        st.markdown(f"""
+        <div class='game-card'>
+            <h4 style='color: #e65100; text-align: center; margin-bottom: 20px;'>
+                📅 {quiz['date']} 급식의 칼로리는?
+            </h4>
+            <div style='background: white; padding: 15px; border-radius: 10px; margin: 15px 0;'>
+                <div style='color: #2e7d32; line-height: 2;'>
+                    {quiz['menu'].replace(chr(10), '<br>')}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 칼로리 추정
+        estimated_calories = st.slider(
+            "이 급식의 칼로리는 몇 kcal일까요?",
+            min_value=300,
+            max_value=1000,
+            value=600,
+            step=10,
+            key="calorie_estimate"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("추정 완료!", key="check_calorie"):
+                st.session_state.calorie_count += 1
+                actual = quiz['actual_calories']
+                difference = abs(estimated_calories - actual)
+                accuracy = max(0, 100 - (difference / actual * 100))
+                
+                if difference <= 50:
+                    st.session_state.calorie_score += 1
+                    st.success(f"🎯 대박! 실제 칼로리는 {actual}kcal입니다! (차이: {difference}kcal)")
+                    st.balloons()
+                elif difference <= 100:
+                    st.warning(f"👍 좋아요! 실제 칼로리는 {actual}kcal입니다! (차이: {difference}kcal)")
+                else:
+                    st.error(f"😅 아쉬워요! 실제 칼로리는 {actual}kcal입니다! (차이: {difference}kcal)")
+                
+                st.markdown(f"""
+                <div class='info-box'>
+                    <p style='margin: 0; text-align: center;'>
+                        🎯 정확도: {accuracy:.1f}%
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col2:
+            if st.button("칼로리 힌트", key="calorie_hint"):
+                actual = quiz['actual_calories']
+                if actual < 500:
+                    st.info("💡 힌트: 가벼운 식사 수준입니다!")
+                elif actual < 700:
+                    st.info("💡 힌트: 적당한 식사 수준입니다!")
+                else:
+                    st.info("💡 힌트: 든든한 식사 수준입니다!")
+    
+    # 점수 표시
+    if st.session_state.calorie_count > 0:
+        accuracy = (st.session_state.calorie_score / st.session_state.calorie_count) * 100
+        st.markdown(f"""
+        <div class='stat-card' style='margin: 20px auto; max-width: 300px;'>
+            <h4 style='margin: 0 0 10px 0;'>🔥 칼로리 마스터</h4>
+            <p style='margin: 5px 0;'>정확한 추정: {st.session_state.calorie_score}개</p>
+            <p style='margin: 5px 0;'>총 추정: {st.session_state.calorie_count}개</p>
+            <p style='margin: 5px 0;'>성공률: {accuracy:.1f}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def play_card_matching(events: List[Dict[str, Any]]):
+    """급식 카드 매칭 게임"""
+    st.markdown("### 🃏 급식 카드 매칭")
+    
+    if len(events) < 4:
+        st.error("카드 게임을 위한 충분한 데이터가 없습니다.")
+        return
+    
+    # 게임 초기화
+    if 'cards' not in st.session_state:
+        # 4쌍의 카드 생성
+        selected_events = random.sample(events, 4)
+        cards = []
+        for i, event in enumerate(selected_events):
+            clean_menu = re.sub('<.*?>', '', event['extendedProps']['description'])
+            menu_items = [item.strip().replace('🍽 ', '') for item in clean_menu.split('\n') if item.strip()]
+            main_menu = menu_items[0] if menu_items else "급식"
+            
+            # 같은 메뉴 2장씩
+            cards.extend([{'id': i, 'menu': main_menu, 'flipped': False, 'matched': False}] * 2)
+        
+        random.shuffle(cards)
+        st.session_state.cards = cards
+        st.session_state.flipped_cards = []
+        st.session_state.matches = 0
+        st.session_state.moves = 0
+    
+    # 게임 리셋
+    if st.button("새 게임 시작!", key="reset_cards"):
+        del st.session_state.cards
+        st.rerun()
+    
+    # 카드 표시
+    st.markdown("### 같은 메뉴 카드 두 장을 찾아보세요!")
+    
+    cols = st.columns(4)
+    for i, card in enumerate(st.session_state.cards):
+        with cols[i % 4]:
+            if i % 4 == 0 and i > 0:
+                st.markdown("<br>", unsafe_allow_html=True)
+            
+            # 카드 버튼
+            if card['matched']:
+                st.success(f"✅ {card['menu']}")
+            elif card['flipped'] or i in st.session_state.flipped_cards:
+                st.info(f"🍽️ {card['menu']}")
+            else:
+                if st.button("❓", key=f"card_{i}", help="클릭해서 카드를 뒤집어보세요"):
+                    if len(st.session_state.flipped_cards) < 2 and not card['flipped']:
+                        st.session_state.flipped_cards.append(i)
+                        st.session_state.moves += 1
+                        
+                        # 두 장이 뒤집어졌을 때 매칭 확인
+                        if len(st.session_state.flipped_cards) == 2:
+                            card1_idx, card2_idx = st.session_state.flipped_cards
+                            card1 = st.session_state.cards[card1_idx]
+                            card2 = st.session_state.cards[card2_idx]
+                            
+                            if card1['id'] == card2['id']:  # 같은 메뉴
+                                st.session_state.cards[card1_idx]['matched'] = True
+                                st.session_state.cards[card2_idx]['matched'] = True
+                                st.session_state.matches += 1
+                                st.success("🎉 매칭 성공!")
+                            else:
+                                st.error("💭 다시 시도해보세요!")
+                            
+                            st.session_state.flipped_cards = []
+                        
+                        st.rerun()
+    
+    # 게임 상태 표시
+    st.markdown(f"""
+    <div class='success-box'>
+        <p style='margin: 0; text-align: center;'>
+            🎯 매칭: {st.session_state.matches}/4 | 🔄 시도: {st.session_state.moves}번
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 게임 완료
+    if st.session_state.matches == 4:
+        st.balloons()
+        st.success(f"🏆 축하합니다! {st.session_state.moves}번 만에 모든 카드를 매칭했습니다!")
+
+def play_lucky_menu(events: List[Dict[str, Any]]):
+    """행운의 메뉴 뽑기 게임"""
+    st.markdown("### 🎲 행운의 메뉴 뽑기")
+    
+    if not events:
+        st.error("급식 데이터가 없습니다.")
+        return
+    
+    st.markdown("""
+    <div class='game-card'>
+        <h4 style='color: #e65100; text-align: center; margin-bottom: 20px;'>
+            🔮 오늘의 운세를 확인해보세요!
+        </h4>
+        <p style='text-align: center; color: #2e7d32; font-size: 1.1rem;'>
+            랜덤으로 급식 메뉴를 뽑아서 운세를 알아보는 재미있는 게임입니다.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🍀 행운의 메뉴", key="lucky_draw"):
+            random_event = random.choice(events)
+            clean_menu = re.sub('<.*?>', '', random_event['extendedProps']['description'])
+            menu_items = [item.strip().replace('🍽 ', '') for item in clean_menu.split('\n') if item.strip()]
+            lucky_menu = random.choice(menu_items) if menu_items else "특별한 메뉴"
+            
+            date_obj = datetime.datetime.strptime(random_event['start'], '%Y-%m-%d')
+            formatted_date = date_obj.strftime('%m월 %d일')
+            calories = random_event['extendedProps'].get('calories', 0)
+            
+            # 운세 메시지 생성
+            fortunes = [
+                "오늘은 새로운 도전을 해보는 것이 좋겠어요! 🌟",
+                "친구들과 함께 하는 시간이 특별한 행운을 가져다 줄 거예요! 👫",
+                "공부에 집중하면 좋은 결과가 있을 것 같아요! 📚",
+                "가족과의 시간을 소중히 하세요! 💕",
+                "오늘 하루 웃음이 많은 하루가 될 것 같아요! 😊",
+                "새로운 취미를 시작해보는 것은 어떨까요? 🎨",
+                "건강에 신경 쓰는 하루가 되길 바라요! 💪"
+            ]
+            
+            fortune = random.choice(fortunes)
+            
+            st.markdown(f"""
+            <div class='success-box'>
+                <h3 style='color: #1b5e20; text-align: center; margin-bottom: 15px;'>
+                    🎉 행운의 메뉴가 결정되었습니다!
+                </h3>
+                <div style='background: white; padding: 20px; border-radius: 15px; text-align: center;'>
+                    <h2 style='color: #2e7d32; margin: 10px 0;'>🍽️ {lucky_menu}</h2>
+                    <p style='color: #666; margin: 5px 0;'>📅 {formatted_date} 급식</p>
+                    <p style='color: #ff6600; margin: 5px 0; font-weight: bold;'>🔥 {calories}kcal</p>
+                </div>
+                <div style='margin-top: 15px; padding: 15px; background: linear-gradient(135deg, #fff3e0, #ffe0b2); border-radius: 10px;'>
+                    <h4 style='color: #e65100; margin: 0 0 10px 0; text-align: center;'>🔮 오늘의 운세</h4>
+                    <p style='color: #2e7d32; margin: 0; text-align: center; font-size: 1.1rem;'>{fortune}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        if st.button("🎯 칼로리 추천", key="calorie_recommend"):
+            # 사용자의 목표 칼로리 입력받기
+            target_calories = st.slider("목표 칼로리를 설정하세요", 400, 800, 650, step=50)
+            
+            # 목표 칼로리와 가장 가까운 메뉴 찾기
+            best_match = None
+            min_diff = float('inf')
+            
+            for event in events:
+                event_calories = event['extendedProps'].get('calories', 0)
+                diff = abs(event_calories - target_calories)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_match = event
+            
+            if best_match:
+                clean_menu = re.sub('<.*?>', '', best_match['extendedProps']['description'])
+                date_obj = datetime.datetime.strptime(best_match['start'], '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%m월 %d일')
+                actual_calories = best_match['extendedProps'].get('calories', 0)
+                
+                st.markdown(f"""
+                <div class='info-box'>
+                    <h3 style='color: #e65100; text-align: center; margin-bottom: 15px;'>
+                        🎯 칼로리 맞춤 추천!
+                    </h3>
+                    <div style='background: white; padding: 15px; border-radius: 10px;'>
+                        <p style='color: #2e7d32; text-align: center; margin: 5px 0;'>
+                            📅 {formatted_date} 급식
+                        </p>
+                        <p style='color: #ff6600; text-align: center; font-weight: bold; margin: 10px 0;'>
+                            🔥 {actual_calories}kcal (목표: {target_calories}kcal)
+                        </p>
+                        <div style='color: #2e7d32; line-height: 2; margin-top: 15px;'>
+                            {clean_menu.replace(chr(10), '<br>')}
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    with col3:
+        if st.button("🌟 이번 주 베스트", key="weekly_best"):
+            # 이번 주 날짜 계산
+            today = datetime.datetime.now(KST)
+            week_start = today - datetime.timedelta(days=today.weekday())
+            week_end = week_start + datetime.timedelta(days=6)
+            
+            week_events = [
+                event for event in events 
+                if week_start.strftime('%Y-%m-%d') <= event['start'] <= week_end.strftime('%Y-%m-%d')
+            ]
+            
+            if week_events:
+                # 칼로리가 가장 적당한 메뉴 (600-700kcal) 찾기
+                best_events = [
+                    event for event in week_events 
+                    if 600 <= event['extendedProps'].get('calories', 0) <= 700
+                ]
+                
+                if not best_events:
+                    best_events = week_events
+                
+                best_event = random.choice(best_events)
+                clean_menu = re.sub('<.*?>', '', best_event['extendedProps']['description'])
+                date_obj = datetime.datetime.strptime(best_event['start'], '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%m월 %d일')
+                calories = best_event['extendedProps'].get('calories', 0)
+                
+                st.markdown(f"""
+                <div class='success-box'>
+                    <h3 style='color: #1b5e20; text-align: center; margin-bottom: 15px;'>
+                        ⭐ 이번 주 베스트 급식!
+                    </h3>
+                    <div style='background: white; padding: 15px; border-radius: 10px;'>
+                        <p style='color: #2e7d32; text-align: center; margin: 5px 0;'>
+                            📅 {formatted_date} 급식
+                        </p>
+                        <p style='color: #ff6600; text-align: center; font-weight: bold; margin: 10px 0;'>
+                            🔥 {calories}kcal
+                        </p>
+                        <div style='color: #2e7d32; line-height: 2; margin-top: 15px;'>
+                            {clean_menu.replace(chr(10), '<br>')}
+                        </div>
+                    </div>
+                    <p style='color: #4caf50; text-align: center; margin: 15px 0 0 0; font-weight: 600;'>
+                        🌟 영양과 맛의 완벽한 균형! 🌟
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.warning("이번 주 급식 데이터가 없습니다.")
 
 def create_school_info():
     """학교 정보 탭 생성 (초록 테마)"""
@@ -821,11 +1405,45 @@ def create_school_info():
             <div style='line-height: 2; color: #1b5e20;'>
                 <p><strong>📅 캘린더:</strong> 날짜 클릭으로 상세 메뉴 확인</p>
                 <p><strong>🔍 검색:</strong> 원하는 메뉴나 재료 검색</p>
+                <p><strong>🎮 게임:</strong> 재미있는 급식 미니게임</p>
                 <p><strong>🎆 폭죽:</strong> 우하단 버튼으로 재미있는 효과</p>
                 <p><strong>📱 반응형:</strong> 모바일, 태블릿 최적화</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
+    
+    # 새로운 기능 소개
+    st.markdown("""
+    <div style='background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c8 100%); 
+               border-radius: 20px; padding: 30px; margin: 30px 0;'>
+        <h3 style='color: #1b5e20; text-align: center; margin-bottom: 20px; font-size: 1.5rem;'>
+            🆕 새로운 기능들
+        </h3>
+        <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;'>
+            <div style='background: white; padding: 20px; border-radius: 15px; text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 10px;'>🔥</div>
+                <h4 style='color: #2e7d32; margin: 10px 0;'>칼로리 정보</h4>
+                <p style='color: #666; margin: 0; font-size: 0.9rem;'>
+                    각 급식의 예상 칼로리를 확인할 수 있어요
+                </p>
+            </div>
+            <div style='background: white; padding: 20px; border-radius: 15px; text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 10px;'>🎮</div>
+                <h4 style='color: #2e7d32; margin: 10px 0;'>미니게임</h4>
+                <p style='color: #666; margin: 0; font-size: 0.9rem;'>
+                    급식 관련 재미있는 게임을 즐겨보세요
+                </p>
+            </div>
+            <div style='background: white; padding: 20px; border-radius: 15px; text-align: center;'>
+                <div style='font-size: 2rem; margin-bottom: 10px;'>📊</div>
+                <h4 style='color: #2e7d32; margin: 10px 0;'>통계 정보</h4>
+                <p style='color: #666; margin: 0; font-size: 0.9rem;'>
+                    평균 칼로리 등 다양한 통계를 확인해보세요
+                </p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
     # 피드백 섹션
     st.markdown("""
@@ -864,5 +1482,4 @@ def create_school_info():
     """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
-
     main()
